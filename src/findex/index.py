@@ -1,52 +1,79 @@
-import argparse
-import tracemalloc
-import time
-from collections import defaultdict, Counter
+import pickle
+from collections.abc import Mapping
+from functools import cached_property
+from contextlib import contextmanager
 from pathlib import Path
-
-# Імпорти з вашої Лаби 1
-from findex.document import iter_documents
-from findex.tokenizer import tokenize
 from findex.models import Posting, DocMeta
-from findex.storage import save_index_pickle
+from findex.utils import timed
 
 
-class InvertedIndex:
-    def __init__(self):
-        self.postings = defaultdict(list)
-        self.doc_meta = {}
-        self._next_doc_id = 1
+class Index(Mapping):
+    def __init__(self, postings: dict[str, list[Posting]], doc_meta: dict[int, DocMeta]):
+        self._postings = postings
+        self._doc_meta = doc_meta
 
-    def build(self, corpus_dir: str):
-        for filename, text in iter_documents(corpus_dir):
-            doc_id = self._next_doc_id
-            self._next_doc_id += 1
+    def __getitem__(self, term: str) -> list[Posting]:
+        return self._postings.get(term, [])
 
-            tokens = list(tokenize(text))
-            self.doc_meta[doc_id] = DocMeta(doc_id=doc_id, name=filename, length=len(tokens))
+    def __iter__(self):
+        return iter(self._postings)
 
-            term_freqs = Counter(tokens)
-            for term, freq in term_freqs.items():
-                self.postings[term].append(Posting(doc_id=doc_id, frequency=freq))
+    def __len__(self):
+        return len(self._postings)
+
+    def __contains__(self, term: object) -> bool:
+        return term in self._postings
+
+    def __repr__(self):
+        return f"<Index vocab_size={len(self)} docs={self.num_docs}>"
+
+    @cached_property
+    def num_docs(self) -> int:
+        return len(self._doc_meta)
+
+    @cached_property
+    def avg_doc_length(self) -> float:
+        if not self.num_docs: return 0.0
+        total_len = sum(meta.length for meta in self._doc_meta.values())
+        return total_len / self.num_docs
+
+    def df(self, term: str) -> int:
+        return len(self[term])
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build inverted index")
-    parser.add_argument("corpus_dir", help="Path to corpus directory")
-    parser.add_argument("--out", required=True, help="Output index file")
-    args = parser.parse_args()
+@contextmanager
+def open_index(filepath: str | Path):
+    with open(filepath, 'rb') as f:
+        data = pickle.load(f)
+    index = Index(data["postings"], data["meta"])
+    try:
+        yield index
+    finally:
+        del index  # Звільнення ресурсів
 
-    tracemalloc.start()
-    start_time = time.perf_counter()
 
-    index = InvertedIndex()
-    index.build(args.corpus_dir)
-    save_index_pickle({"postings": index.postings, "meta": index.doc_meta}, args.out)
+@timed
+def build_index(corpus_dir: str, out_path: str):
+    from findex.document import iter_documents
+    from findex.tokenizer import tokenize
+    from collections import defaultdict
 
-    end_time = time.perf_counter()
-    _, peak_memory = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+    postings = defaultdict(list)
+    doc_meta = {}
+    doc_id = 1
 
-    print(f"Index built and saved to {args.out}")
-    print(f"Time taken: {end_time - start_time:.4f} seconds")
-    print(f"Peak memory: {peak_memory / (1024 * 1024):.4f} MB")
+    for filename, text in iter_documents(corpus_dir):
+        tokens = list(tokenize(text))
+        doc_meta[doc_id] = DocMeta(doc_id, filename, len(tokens))
+
+        # Збирання позицій
+        term_positions = defaultdict(list)
+        for pos, term in enumerate(tokens):
+            term_positions[term].append(pos)
+
+        for term, positions in term_positions.items():
+            postings[term].append(Posting(doc_id, len(positions), tuple(positions)))
+        doc_id += 1
+
+    with open(out_path, 'wb') as f:
+        pickle.dump({"postings": dict(postings), "meta": doc_meta}, f)
