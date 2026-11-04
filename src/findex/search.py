@@ -1,90 +1,62 @@
-import heapq
-import functools
 from pathlib import Path
-from findex.index import open_index
-from findex.scoring import BM25, TfIdf
+import numpy as np
+from findex.index import Index
 from findex.models import SearchResult
-from findex.parser import Term, And, Or, Not
-from findex.utils import timed
 from findex.tokenizer import tokenize
 
 
-def get_snippet(filepath: Path, term: str, radius: int = 80) -> str:
-    if not filepath.exists():
-        return ""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            text = f.read()
-    except Exception:
-        return ""
+def get_snippet(corpus_path: Path, name: str, query_tokens: list[str]) -> str:
+    text = ""
+    file_path = corpus_path / name
+    if file_path.exists():
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                text = f.read()
+        except Exception:
+            pass
 
-    idx = text.lower().find(term.lower())
-    if idx == -1:
-        return text[:radius * 2] + "..."
-    start = max(0, idx - radius)
-    end = min(len(text), idx + len(term) + radius)
-    return f"...{text[start:idx]}[{text[idx:idx + len(term)]}]{text[idx + len(term):end]}..."
+    if not text:
+        return "..."
 
+    lower_text = text.lower()
+    for token in query_tokens:
+        pos = lower_text.find(token)
+        if pos != -1:
+            start = max(0, pos - 50)
+            end = min(len(text), pos + 100)
+            snippet = text[start:end].replace("\n", " ")
+            return f"...{snippet}..."
 
-def cached_evaluate(query_str: str, index) -> set[int]:
-    """Внутренняя функция с lru_cache, которая кеширует результат по строке запроса,
-    не передавая нехешованый объект index напрямую в декоратор."""
-
-    @functools.lru_cache(maxsize=128)
-    def _evaluate_memo(q: str):
-        terms = list(tokenize(q))
-        if not terms:
-            return frozenset()
-        node = Term(terms[0])
-        for t in terms[1:]:
-            node = node & Term(t)
-        return frozenset(node.evaluate(index))
-
-    return set(_evaluate_memo(query_str))
+    return text[:150].replace("\n", " ") + "..."
 
 
-@timed
-def search(query: str, index, scorer, corpus_dir: Path, top_k: int = 5) -> list[SearchResult]:
-    matched_docs = cached_evaluate(query, index)
-    terms = list(tokenize(query))
+def search(query: str, index: Index, scorer, corpus_path: Path, top_k: int = 5) -> list[SearchResult]:
+    query_tokens = list(tokenize(query))
+    if not query_tokens or index.num_docs == 0:
+        return []
 
-    heap = []
-    for doc_id in matched_docs:
-        doc_score = 0.0
-        dl = index._doc_meta[doc_id].length
+    scores = scorer.score(query_tokens, index)
+    if len(scores) == 0:
+        return []
 
-        for term in terms:
-            postings = index[term]
-            p = next((post for post in postings if post.doc_id == doc_id), None)
-            if p:
-                doc_score += scorer.score(p.frequency, index.df(term), index.num_docs, dl, index.avg_doc_length)
+    k = min(top_k, len(scores))
+    if k <= 0:
+        return []
 
-        doc_name = index._doc_meta[doc_id].name
-        snippet = get_snippet(corpus_dir / doc_name, terms[0] if terms else "")
-
-        # Сохраняем отрицательный score для max-heap в heapq (по умолчанию в Python min-heap)
-        heapq.heappush(heap, SearchResult(score=-doc_score, doc_id=doc_id, name=doc_name, snippet=snippet))
+    part_indices = np.argpartition(scores, -k)[-k:]
+    top_indices = part_indices[np.argsort(scores[part_indices])[::-1]]
 
     results = []
-    for _ in range(min(top_k, len(heap))):
-        res = heapq.heappop(heap)
-        results.append(SearchResult(score=-res.score, doc_id=res.doc_id, name=res.name, snippet=res.snippet))
+    for idx_val in top_indices:
+        score = float(scores[idx_val])
+        if score <= 0:
+            continue
+        doc_id = int(idx_val + 1)
+        if doc_id not in index._doc_meta:
+            continue
+        meta = index._doc_meta[doc_id]
+
+        snippet = get_snippet(corpus_path, meta.name, query_tokens)
+        results.append(SearchResult(doc_id=doc_id, name=meta.name, score=score, snippet=snippet))
+
     return results
-
-
-if __name__ == "__main__":
-    corpus = Path("data/corpus")
-    with open_index("index.bin") as idx:
-        print(f"Індекс завантажено: {idx}")
-
-        # Перший запит
-        print("\n--- Перший запит ---")
-        res1 = search("prince war", idx, BM25(), corpus)
-
-        # Повторний запит (тут спрацює lru_cache і ви побачите швидкий час виконання)
-        print("\n--- Повторний запит (кеш) ---")
-        res2 = search("prince war", idx, BM25(), corpus)
-
-        print("\nРезультати пошуку:")
-        for r in res1:
-            print(f"[{r.score:.4f}] {r.name}\nSnippet: {r.snippet}\n")

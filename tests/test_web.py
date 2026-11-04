@@ -1,8 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient
+from findex.web.app import app, get_index
 from findex.web.app import app, get_index
 from findex.index import Index
 from findex.models import DocMeta
+
 
 class MockIndex(Index):
     def __init__(self):
