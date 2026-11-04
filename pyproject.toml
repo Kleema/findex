@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "findex"
-version = "0.6.0"
-description = "Custom search engine with inverted index, BM25, Async Crawler and CLI"
+version = "0.7.0"
+description = "Custom search engine with FastAPI web interface, BM25, Async Crawler and CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -16,6 +16,11 @@ dependencies = [
     "rich>=13.0.0",
     "httpx>=0.27.0",
     "selectolax>=0.3.21",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "jinja2>=3.1.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0"
 ]
 
 [project.optional-dependencies]
@@ -26,7 +31,8 @@ dev = [
     "ruff>=0.1.0",
     "psutil>=5.9.0",
     "matplotlib>=3.7.0",
-    "pytest-asyncio>=0.23.0"
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0"
 ]
 
 [project.scripts]

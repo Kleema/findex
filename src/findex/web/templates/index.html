@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Findex Search Engine</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #333; }
+        .search-box { display: flex; gap: 10px; margin-bottom: 30px; }
+        input[type="text"] { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; }
+        select, button { padding: 10px 15px; font-size: 16px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        select { background: #f8f9fa; color: #333; border: 1px solid #ccc; }
+        .result-item { margin-bottom: 20px; padding: 15px; border: 1px solid #e9ecef; border-radius: 6px; background: #fff; }
+        .score { float: right; color: #28a745; font-weight: bold; }
+        .doc-name { font-weight: bold; color: #0056b3; text-decoration: none; }
+        .snippet { margin-top: 8px; color: #555; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Findex Web Search</h1>
+    <form method="get" action="/" class="search-box">
+        <input type="text" name="q" value="{{ q }}" placeholder="Введіть пошуковий запит..." required>
+        <select name="scorer">
+            <option value="bm25" {% if scorer == 'bm25' %}selected{% endif %}>BM25</option>
+            <option value="tfidf" {% if scorer == 'tfidf' %}selected{% endif %}>TF-IDF</option>
+        </select>
+        <button type="submit">Шукати</button>
+    </form>
+
+    {% if q %}
+        <h3>Результати для: "{{ q }}"</h3>
+        {% if results %}
+            {% for r in results %}
+                <div class="result-item">
+                    <span class="score">Score: {{ "%.4f"|format(r.score) }}</span>
+                    <a href="/docs/{{ r.doc_id }}" class="doc-name">{{ r.name }}</a>
+                    <div class="snippet">{{ r.snippet | safe }}</div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>Нічого не знайдено.</p>
+        {% endif %}
+    {% endif %}
+</body>
+</html>

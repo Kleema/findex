@@ -30,7 +30,7 @@ def setup_logging(verbose: int, log_file: str | None = None) -> None:
 
     handlers = [logging.StreamHandler(sys.stderr)]
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
 
     logging.basicConfig(
         level=level,
@@ -68,10 +68,7 @@ def cmd_crawl(
             t.add_column("Швидкість", justify="right")
             t.add_column("У черзі", justify="right")
             t.add_column("Активні запити", justify="right")
-
-            elapsed = time.time() - start_time
-            rate = pages / elapsed if elapsed > 0 else 0
-            t.add_row(str(pages), f"{rate:.1f} стор/с", "-", "-")
+            t.add_row("0", "0.0 стор/с", "-", "-")
             return t
 
         with open(out_file, 'w', encoding='utf-8') as f:
@@ -103,7 +100,6 @@ def cmd_crawl(
         console.print("\n[bold red]Краулер зупинено користувачем.[/bold red]")
 
 
-# (Команди cmd_index, cmd_search, cmd_stats залишаються без змін з попередньої версії)
 @app.command("index")
 def cmd_index(
         corpus_dir: Path = typer.Argument(..., help="Path to text corpus directory"),
@@ -151,5 +147,49 @@ def cmd_search(
         err_console.print(f"[bold red]Помилка:[/bold red] {e}")
 
 
-if __name__ == "__main__":
-    app()
+@app.command("stats")
+def cmd_stats(
+    index_file: Path = typer.Argument(..., help="Path to index.bin file"),
+) -> None:
+    """Виведення статистики індексу."""
+    try:
+        with open_index(index_file) as idx:
+            console.print(f"Кількість документів: {idx.num_docs}")
+            console.print(f"Розмір словника: {len(idx)}")
+            console.print(f"Середня довжина документа: {idx.avg_doc_length:.2f}")
+    except Exception as e:
+        err_console.print(f"[bold red]Помилка читання індексу:[/bold red] {e}")
+        raise typer.Exit(code=2)
+
+@app.command("search")
+def cmd_search(
+        index_file: Path = typer.Argument(..., help="Path to index.bin file"),
+        query: str = typer.Argument(..., help="Search query string"),
+        scorer_type: Literal["bm25", "tfidf"] = typer.Option("bm25", "--scorer", "-s", help="Scoring algorithm"),
+        top_k: int = typer.Option(5, "--top-k", "-k", help="Number of results"),
+        json_output: bool = typer.Option(False, "--json", help="Output results in JSON format")
+) -> None:
+    try:
+        if not index_file.exists():
+            err_console.print(f"[bold red]Файл індексу не знайдено:[/bold red] {index_file}")
+            raise typer.Exit(code=1)
+
+        with open_index(index_file) as idx:
+            scorer = BM25() if scorer_type == "bm25" else TfIdf()
+            corpus_path = index_file.parent / "data" / "corpus"
+            results = search(query, idx, scorer, corpus_path, top_k=top_k)
+
+            if json_output:
+                sys.stdout.write(
+                    json.dumps([{"doc_id": r.doc_id, "name": r.name, "score": r.score} for r in results]) + "\n")
+                return
+
+            table = Table(title=f"Результати пошуку: '{query}'")
+            table.add_column("Score", style="cyan");
+            table.add_column("Document", style="magenta");
+            table.add_column("Snippet")
+            for r in results: table.add_row(f"{r.score:.4f}", r.name, r.snippet)
+            console.print(table)
+    except Exception as e:
+        err_console.print(f"[bold red]Помилка:[/bold red] {e}")
+        raise typer.Exit(code=1)
