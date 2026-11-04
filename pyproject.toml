@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "findex"
-version = "0.4.0"
+version = "0.5.0"
 description = "Custom search engine with inverted index, BM25, and CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,6 +22,8 @@ dev = [
     "hypothesis>=6.0.0",
     "pyright>=1.1.0",
     "ruff>=0.1.0",
+    "psutil>=5.9.0",
+    "matplotlib>=3.7.0"
 ]
 
 [project.scripts]

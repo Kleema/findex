@@ -4,7 +4,6 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.table import Table
-from rich.progress import track
 from typing_extensions import Literal
 
 from findex.index import open_index, build_index
@@ -41,14 +40,30 @@ def main(
 @app.command("index")
 def cmd_index(
         corpus_dir: Path = typer.Argument(..., help="Path to text corpus directory"),
-        out: Path = typer.Option(Path("index.bin"), "--out", "-o", help="Output index file path")
+        out: Path = typer.Option(Path("index.bin"), "--out", "-o", help="Output index file path"),
+        workers: int = typer.Option(4, "--workers", "-w", help="Number of workers"),
+        executor: Literal["serial", "threads", "processes"] = typer.Option("processes", "--executor", "-e",
+                                                                           help="Executor type")
 ) -> None:
-    """Побудова та збереження індексу з прогрес-баром."""
+    """Побудова та збереження індексу з паралелізмом."""
     try:
-        logging.info(f"Початок побудови індексу з корпусу: {corpus_dir}")
-        with console.status("[bold green]Будується індекс..."):
-            build_index(corpus_dir, out)
+        logging.info(f"Побудова індексу: {executor} x {workers}")
+
+        try:
+            gil_status = "Вимкнено" if not sys._is_gil_enabled() else "Увімкнено"
+        except AttributeError:
+            gil_status = "Увімкнено (стандартний Python)"
+        logging.info(f"Статус GIL: {gil_status}")
+
+        with console.status(f"[bold green]Будується індекс ({executor}, {workers} робітників)..."):
+            metrics = build_index(corpus_dir, out, executor_type=executor, workers=workers)
+
         console.print(f"[bold green]✓ Індекс успішно збережено у {out}[/bold green]")
+        console.print(f" • Wall time: {metrics['wall_time']:.3f} s")
+        console.print(f" • CPU time: {metrics['cpu_time']:.3f} s")
+        console.print(f" • Merge time: {metrics['merge_time']:.3f} s")
+        console.print(f" • Peak RSS: {metrics['rss_mb']:.2f} MB")
+        console.print(f" • GIL Status: {gil_status}")
     except Exception as e:
         err_console.print(f"[bold red]Помилка побудови індексу:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -62,7 +77,6 @@ def cmd_search(
         top_k: int = typer.Option(5, "--top-k", "-k", help="Number of results"),
         json_output: bool = typer.Option(False, "--json", help="Output results in JSON format to stdout"),
 ) -> None:
-    """Пошук у індексі за ранжуванням BM25 або TF-IDF."""
     try:
         if not index_file.exists():
             raise FileNotFoundError(f"Файл індексу не знайдено: {index_file}")
@@ -70,7 +84,7 @@ def cmd_search(
         logging.debug(f"Завантаження індексу з {index_file}")
         with open_index(index_file) as idx:
             scorer = BM25() if scorer_type == "bm25" else TfIdf()
-            corpus_path = index_file.parent / "data" / "corpus"  # адаптивний шлях
+            corpus_path = index_file.parent / "data" / "corpus"
 
             logging.info(f"Виконання запиту: '{query}' з алгоритмом {scorer_type}")
             results: list[SearchResult] = search(query, idx, scorer, corpus_path, top_k=top_k)
@@ -100,7 +114,6 @@ def cmd_search(
 def cmd_stats(
         index_file: Path = typer.Argument(..., help="Path to index.bin file")
 ) -> None:
-    """Виведення статистики індексу."""
     try:
         if not index_file.exists():
             raise FileNotFoundError(f"Файл індексу не знайдено: {index_file}")
