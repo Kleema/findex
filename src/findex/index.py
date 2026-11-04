@@ -2,6 +2,7 @@ import pickle
 import time
 import os
 import psutil
+import json
 from collections.abc import Mapping
 from functools import cached_property
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ from findex.models import Posting, DocMeta
 from findex.tokenizer import tokenize
 
 
+# (Класи Index та open_index залишаються без змін з лаби 5)
 class Index(Mapping[str, list[Posting]]):
     def __init__(self, postings: dict[str, list[Posting]], doc_meta: dict[int, DocMeta]) -> None:
         self._postings = postings
@@ -67,22 +69,42 @@ def build_partial(paths: list[Path], start_doc_id: int) -> dict[str, dict]:
 
     for filepath in paths:
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
+            if filepath.suffix == '.jsonl':
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip(): continue
+                        data = json.loads(line)
+                        text = data.get("text", "")
+                        name = data.get("url", f"doc_{doc_id}")
+
+                        tokens = list(tokenize(text))
+                        doc_meta[doc_id] = DocMeta(doc_id, name, len(tokens))
+
+                        term_positions = defaultdict(list)
+                        for pos, term in enumerate(tokens):
+                            term_positions[term].append(pos)
+
+                        for term, positions in term_positions.items():
+                            postings[term].append(Posting(doc_id, len(positions), tuple(positions)))
+
+                        doc_id += 1
+            else:  # Обробка звичайних .txt
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+
+                tokens = list(tokenize(text))
+                doc_meta[doc_id] = DocMeta(doc_id, filepath.name, len(tokens))
+
+                term_positions = defaultdict(list)
+                for pos, term in enumerate(tokens):
+                    term_positions[term].append(pos)
+
+                for term, positions in term_positions.items():
+                    postings[term].append(Posting(doc_id, len(positions), tuple(positions)))
+                doc_id += 1
+
         except Exception:
             continue
-
-        tokens = list(tokenize(text))
-        doc_meta[doc_id] = DocMeta(doc_id, filepath.name, len(tokens))
-
-        term_positions: dict[str, list[int]] = defaultdict(list)
-        for pos, term in enumerate(tokens):
-            term_positions[term].append(pos)
-
-        for term, positions in term_positions.items():
-            postings[term].append(Posting(doc_id, len(positions), tuple(positions)))
-
-        doc_id += 1
 
     return {"postings": dict(postings), "meta": doc_meta}
 
@@ -105,10 +127,11 @@ def merge_partials(partials: list[dict[str, dict]]) -> dict[str, dict]:
 def build_index(corpus_dir: str | Path, out_path: str | Path, executor_type: str = "processes", workers: int = 1) -> \
 dict[str, float]:
     corpus_path = Path(corpus_dir)
-    files = [p for p in corpus_path.iterdir() if p.is_file() and p.suffix == '.txt']
+    # Тепер шукаємо .txt та .jsonl файли
+    files = [p for p in corpus_path.iterdir() if p.is_file() and p.suffix in ('.txt', '.jsonl')]
 
     if not files:
-        raise ValueError("Немає .txt файлів у корпусі")
+        raise ValueError("Немає текстових або JSONL файлів у корпусі")
 
     workers = max(1, workers)
     chunk_size = max(1, (len(files) + workers - 1) // workers)
@@ -118,7 +141,7 @@ dict[str, float]:
     curr_id = 1
     for chunk in chunks:
         start_ids.append(curr_id)
-        curr_id += len(chunk)
+        curr_id += 100000  # Безпечний зсув для jsonl-рядків
 
     process = psutil.Process(os.getpid())
     t0 = time.perf_counter()
